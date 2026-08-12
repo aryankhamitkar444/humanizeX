@@ -90,27 +90,39 @@ app.post("/api/detect", async (req, res) => {
 });
 
 // =====================================================
-// HUMANIZER PROVIDER #1
-// HUMANICER
+// MISTRAL AGENT HUMANIZER
 // =====================================================
 
-async function humanizeWithHumanicer(text) {
+async function humanizeWithMistral(text) {
 
     console.log("---------------------------------");
-    console.log("Trying Humanicer...");
+    console.log("Executing Mistral Agent...");
     console.log("---------------------------------");
+
+    if (!process.env.MISTRAL_API_KEY || !process.env.MISTRAL_AGENT_ID) {
+        const err = new Error("MISTRAL_API_KEY or MISTRAL_AGENT_ID is not configured in Environment Variables.");
+        err.code = "CONFIG_ERROR";
+        throw err;
+    }
 
     const response = await fetch(
-        "https://humanicer.com/v1/humanize/free",
+        "https://api.mistral.ai/v1/agents/completions",
         {
             method: "POST",
 
             headers: {
+                "Authorization": `Bearer ${process.env.MISTRAL_API_KEY}`,
                 "Content-Type": "application/json"
             },
 
             body: JSON.stringify({
-                text: text
+                agent_id: process.env.MISTRAL_AGENT_ID,
+                messages: [
+                    {
+                        role: "user",
+                        content: text
+                    }
+                ]
             })
         }
     );
@@ -120,61 +132,47 @@ async function humanizeWithHumanicer(text) {
     try {
         data = await response.json();
     } catch (error) {
-
         throw new Error(
-            `Humanicer returned invalid JSON. HTTP ${response.status}`
+            `Mistral returned invalid JSON response. HTTP ${response.status}`
         );
     }
 
-    console.log("Humanicer HTTP status:", response.status);
-    console.log("Humanicer response:", data);
+    console.log("Mistral HTTP status:", response.status);
 
     // ---------------------------------------------
-    // QUOTA EXHAUSTED
-    // ---------------------------------------------
-
-    if (
-        response.status === 429 ||
-        data.remaining_uses === 0
-    ) {
-
-        const error = new Error(
-            "Humanicer free quota exhausted"
-        );
-
-        error.code = "QUOTA_EXHAUSTED";
-
-        throw error;
-    }
-
-    // ---------------------------------------------
-    // API ERROR
+    // API ERROR HANDLING
     // ---------------------------------------------
 
     if (!response.ok) {
+        console.error("Mistral API error data:", data);
 
         const error = new Error(
-            `Humanicer API error: HTTP ${response.status}`
+            data.message || data.error?.message || `Mistral API error: HTTP ${response.status}`
         );
 
-        error.code = "API_ERROR";
+        error.code = response.status === 429
+            ? "QUOTA_EXHAUSTED"
+            : "API_ERROR";
+
         error.details = data;
 
         throw error;
     }
 
     // ---------------------------------------------
-    // CHECK HUMANIZED TEXT
+    // EXTRACT TEXT
     // ---------------------------------------------
 
+    const humanizedText = data.choices?.[0]?.message?.content;
+
     if (
-        !data.humanized_text ||
-        typeof data.humanized_text !== "string" ||
-        !data.humanized_text.trim()
+        !humanizedText ||
+        typeof humanizedText !== "string" ||
+        !humanizedText.trim()
     ) {
 
         const error = new Error(
-            "Humanicer returned no humanized text"
+            "Mistral returned no humanized text content"
         );
 
         error.code = "EMPTY_RESULT";
@@ -184,167 +182,30 @@ async function humanizeWithHumanicer(text) {
     }
 
     // ---------------------------------------------
-    // SUCCESS
+    // SUCCESS RETURN
     // ---------------------------------------------
 
     return {
-        provider: "Humanicer",
+        provider: "Mistral Agent",
 
         original: text,
 
-        humanized: data.humanized_text,
+        humanized: humanizedText.trim(),
 
-        humanScore: data.humanScore ?? null,
+        humanScore: null,
 
-        grammarScore: data.grammarScore ?? null,
+        grammarScore: null,
 
-        simplicityScore: data.simplicityScore ?? null,
+        simplicityScore: null,
 
-        stylingScore: data.stylingScore ?? null,
+        stylingScore: null,
 
-        remainingUses: data.remaining_uses ?? null,
+        remainingUses: null,
 
-        resetTime: data.reset_time ?? null,
+        resetTime: null,
 
-        wordCount: data.word_count ?? null
+        wordCount: text.split(/\s+/).filter(Boolean).length
     };
-}
-
-// =====================================================
-// FUTURE PROVIDER #2
-// =====================================================
-
-async function humanizeWithProvider2(text) {
-
-    /*
-        We will add another REAL humanizer API here.
-
-        Example:
-
-        const response = await fetch(
-            "PROVIDER_2_ENDPOINT",
-            {
-                method: "POST",
-                headers: {
-                    ...
-                },
-                body: JSON.stringify({
-                    text: text
-                })
-            }
-        );
-
-        ...
-
-    */
-
-    const error = new Error(
-        "Provider 2 is not configured yet"
-    );
-
-    error.code = "NOT_CONFIGURED";
-
-    throw error;
-}
-
-// =====================================================
-// FUTURE PROVIDER #3
-// =====================================================
-
-async function humanizeWithProvider3(text) {
-
-    /*
-        Another dedicated humanizer will go here.
-    */
-
-    const error = new Error(
-        "Provider 3 is not configured yet"
-    );
-
-    error.code = "NOT_CONFIGURED";
-
-    throw error;
-}
-
-// =====================================================
-// HUMANIZER ROUTER
-// =====================================================
-
-async function humanizeText(text) {
-
-    const providers = [
-
-        {
-            name: "Humanicer",
-            function: humanizeWithHumanicer
-        },
-
-        {
-            name: "Provider2",
-            function: humanizeWithProvider2
-        },
-
-        {
-            name: "Provider3",
-            function: humanizeWithProvider3
-        }
-
-    ];
-
-    const providerErrors = [];
-
-    // ---------------------------------------------
-    // TRY PROVIDERS ONE BY ONE
-    // ---------------------------------------------
-
-    for (const provider of providers) {
-
-        try {
-
-            console.log("");
-            console.log("=================================");
-            console.log("TRYING PROVIDER:", provider.name);
-            console.log("=================================");
-
-            const result = await provider.function(text);
-
-            console.log("");
-            console.log("SUCCESS");
-            console.log("Provider:", provider.name);
-            console.log("");
-
-            return result;
-
-        } catch (error) {
-
-            console.log("");
-            console.log(
-                `Provider ${provider.name} failed:`,
-                error.message
-            );
-
-            providerErrors.push({
-                provider: provider.name,
-                error: error.message,
-                code: error.code || "UNKNOWN"
-            });
-
-            // Continue to next provider
-            continue;
-        }
-    }
-
-    // ---------------------------------------------
-    // ALL PROVIDERS FAILED
-    // ---------------------------------------------
-
-    const error = new Error(
-        "All humanizer providers failed"
-    );
-
-    error.providers = providerErrors;
-
-    throw error;
 }
 
 // =====================================================
@@ -386,14 +247,14 @@ app.post("/api/humanize", async (req, res) => {
         console.log("Characters:", cleanText.length);
         console.log(
             "Words:",
-            cleanText.split(/\s+/).length
+            cleanText.split(/\s+/).filter(Boolean).length
         );
 
         // ---------------------------------------------
-        // SEND TO HUMANIZER ROUTER
+        // DIRECT CALL TO MISTRAL
         // ---------------------------------------------
 
-        const result = await humanizeText(cleanText);
+        const result = await humanizeWithMistral(cleanText);
 
         // ---------------------------------------------
         // RETURN RESULT
@@ -427,28 +288,21 @@ app.post("/api/humanize", async (req, res) => {
 
         console.error("");
         console.error("=================================");
-        console.error("ALL HUMANIZERS FAILED");
+        console.error("HUMANIZATION FAILED");
         console.error("=================================");
-        console.error(error.message);
+        console.error("Message:", error.message);
 
-        if (error.providers) {
-
-            console.error(
-                "Provider errors:",
-                error.providers
-            );
+        if (error.details) {
+            console.error("Details:", error.details);
         }
 
-        return res.status(503).json({
+        return res.status(500).json({
 
             success: false,
 
             error: "Humanization failed",
 
-            message:
-                "All available humanizer providers are currently unavailable.",
-
-            providers: error.providers || []
+            message: error.message || "Failed to process text with Mistral Agent."
         });
     }
 });
