@@ -25,6 +25,48 @@ app.get("/", (req, res) => {
 });
 
 // =====================================================
+// SHARED HELPER
+// Mistral's /v1/conversations response can include several
+// entries in `outputs` when the agent uses tools (web search,
+// code interpreter, etc.) — tool-call entries, tool-result
+// entries, and finally the actual text reply. We scan from
+// the END backwards to find the last entry that actually has
+// text content, instead of assuming outputs[0] is the reply.
+// =====================================================
+
+function extractMistralReplyText(outputs) {
+
+    if (!Array.isArray(outputs) || outputs.length === 0) {
+        return null;
+    }
+
+    for (let i = outputs.length - 1; i >= 0; i--) {
+
+        const entry = outputs[i];
+
+        if (!entry) {
+            continue;
+        }
+
+        if (typeof entry.content === "string" && entry.content.trim()) {
+            return entry.content;
+        }
+
+        if (Array.isArray(entry.content)) {
+            const joined = entry.content
+                .map(chunk => (chunk && typeof chunk.text === "string") ? chunk.text : "")
+                .join("");
+
+            if (joined.trim()) {
+                return joined;
+            }
+        }
+    }
+
+    return null;
+}
+
+// =====================================================
 // AI DETECTION - MISTRAL AGENT
 // =====================================================
 
@@ -88,22 +130,11 @@ async function detectWithMistral(text) {
 
     // ---------------------------------------------
     // EXTRACT THE AGENT'S REPLY TEXT
-    // /v1/conversations returns:
-    // { conversation_id, outputs: [{ content: "..." }], usage }
-    // content can be a plain string, or (rarely) an array of
-    // content chunks like [{ type: "text", text: "..." }] —
-    // handle both.
+    // See extractMistralReplyText above — outputs may contain
+    // tool-call/tool-result entries before the actual message.
     // ---------------------------------------------
 
-    const outputContent = data.outputs?.[0]?.content;
-
-    let replyText = null;
-
-    if (typeof outputContent === "string") {
-        replyText = outputContent;
-    } else if (Array.isArray(outputContent)) {
-        replyText = outputContent.map(chunk => chunk.text || "").join("");
-    }
+    const replyText = extractMistralReplyText(data.outputs);
 
     if (!replyText || typeof replyText !== "string") {
 
@@ -295,19 +326,11 @@ async function humanizeWithMistral(text) {
 
     // ---------------------------------------------
     // EXTRACT TEXT
-    // /v1/conversations returns:
-    // { conversation_id, outputs: [{ content: "..." }], usage }
+    // See extractMistralReplyText above — outputs may contain
+    // tool-call/tool-result entries before the actual message.
     // ---------------------------------------------
 
-    const outputContent = data.outputs?.[0]?.content;
-
-    let humanizedText = null;
-
-    if (typeof outputContent === "string") {
-        humanizedText = outputContent;
-    } else if (Array.isArray(outputContent)) {
-        humanizedText = outputContent.map(chunk => chunk.text || "").join("");
-    }
+    const humanizedText = extractMistralReplyText(data.outputs);
 
     if (
         !humanizedText ||
