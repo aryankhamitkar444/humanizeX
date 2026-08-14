@@ -25,8 +25,156 @@ app.get("/", (req, res) => {
 });
 
 // =====================================================
-// AI DETECTION - SAPLING
+// AI DETECTION - MISTRAL AGENT
 // =====================================================
+
+async function detectWithMistral(text) {
+
+    console.log("---------------------------------");
+    console.log("Executing Mistral Detection Agent...");
+    console.log("---------------------------------");
+
+    if (!process.env.MISTRAL_API_KEY || !process.env.MISTRAL_DETECT_AGENT_ID) {
+        const err = new Error("MISTRAL_API_KEY or MISTRAL_DETECT_AGENT_ID is not configured in Environment Variables.");
+        err.code = "CONFIG_ERROR";
+        throw err;
+    }
+
+    const response = await fetch(
+        "https://api.mistral.ai/v1/agents/completions",
+        {
+            method: "POST",
+
+            headers: {
+                "Authorization": `Bearer ${process.env.MISTRAL_API_KEY}`,
+                "Content-Type": "application/json"
+            },
+
+            body: JSON.stringify({
+                agent_id: process.env.MISTRAL_DETECT_AGENT_ID,
+                messages: [
+                    {
+                        role: "user",
+                        content: text
+                    }
+                ]
+            })
+        }
+    );
+
+    let data;
+
+    try {
+        data = await response.json();
+    } catch (error) {
+        throw new Error(
+            `Mistral returned invalid JSON response. HTTP ${response.status}`
+        );
+    }
+
+    console.log("Mistral detect HTTP status:", response.status);
+    console.log("Mistral detect response:", data);
+
+    if (!response.ok) {
+
+        const error = new Error(
+            data.message || data.error?.message || `Mistral API error: HTTP ${response.status}`
+        );
+
+        error.code = response.status === 429
+            ? "QUOTA_EXHAUSTED"
+            : "API_ERROR";
+
+        error.details = data;
+
+        throw error;
+    }
+
+    const replyText = data.choices?.[0]?.message?.content;
+
+    if (!replyText || typeof replyText !== "string") {
+
+        const error = new Error(
+            "Mistral detection agent returned no text content"
+        );
+
+        error.code = "EMPTY_RESULT";
+        error.details = data;
+
+        throw error;
+    }
+
+    // ---------------------------------------------
+    // PARSE THE AGENT'S REPLY
+    // The agent replies with a structured JSON object like:
+    // {
+    //   "ai_percentage": 86.5,
+    //   "confidence": "medium",
+    //   "category": "ai_generated",
+    //   "segment_analysis": [...],
+    //   ...
+    // }
+    // sometimes wrapped in ```json ... ``` code fences, and
+    // possibly with stray text before/after. We extract the
+    // {...} block, JSON.parse it, and read ai_percentage
+    // directly — rather than grabbing "the first number we
+    // see", which breaks the moment the JSON field order
+    // changes or the model adds a preamble.
+    // ---------------------------------------------
+
+    let percentage = null;
+
+    const jsonMatch = replyText.match(/\{[\s\S]*\}/);
+
+    if (jsonMatch) {
+
+        try {
+
+            const parsed = JSON.parse(jsonMatch[0]);
+
+            if (typeof parsed.ai_percentage === "number") {
+                percentage = parsed.ai_percentage;
+            }
+
+        } catch (jsonError) {
+            console.warn("HumanizeX: agent reply looked like JSON but failed to parse:", jsonError.message);
+        }
+    }
+
+    // ---------------------------------------------
+    // FALLBACK: agent didn't return valid/expected JSON —
+    // try to salvage a percentage from raw text as a last resort.
+    // ---------------------------------------------
+
+    if (percentage === null) {
+
+        const fallbackMatch = replyText.match(/"?ai_percentage"?\s*:?\s*(\d{1,3}(?:\.\d+)?)/)
+            || replyText.match(/(\d{1,3}(?:\.\d+)?)\s*%/);
+
+        if (fallbackMatch) {
+            percentage = parseFloat(fallbackMatch[1]);
+        }
+    }
+
+    if (percentage === null || Number.isNaN(percentage)) {
+
+        const error = new Error(
+            `Couldn't find ai_percentage in the agent's reply: "${replyText.slice(0, 200)}"`
+        );
+
+        error.code = "UNPARSEABLE_RESULT";
+        error.details = { replyText };
+
+        throw error;
+    }
+
+    // Clamp to 0-100 in case the agent replies with something odd
+    percentage = Math.max(0, Math.min(100, percentage));
+
+    // Convert to a 0.0-1.0 score to match the shape the
+    // extension already expects
+    return percentage / 100;
+}
 
 app.post("/api/detect", async (req, res) => {
 
@@ -44,47 +192,24 @@ app.post("/api/detect", async (req, res) => {
         console.log("AI DETECTION REQUEST");
         console.log("=================================");
 
-        const response = await fetch(
-            "https://api.sapling.ai/api/v1/aidetect",
-            {
-                method: "POST",
-
-                headers: {
-                    "Content-Type": "application/json"
-                },
-
-                body: JSON.stringify({
-                    key: process.env.SAPLING_API_KEY,
-                    text: text,
-                    sent_scores: false
-                })
-            }
-        );
-
-        const data = await response.json();
-
-        console.log("Sapling response:", data);
-
-        if (!response.ok) {
-
-            return res.status(response.status).json({
-                error: "Sapling detection failed",
-                details: data
-            });
-        }
+        const score = await detectWithMistral(text);
 
         return res.json({
             success: true,
-            score: data.score
+            score
         });
 
     } catch (error) {
 
-        console.error("Detection error:", error);
+        console.error("Detection error:", error.message);
+
+        if (error.details) {
+            console.error("Details:", error.details);
+        }
 
         return res.status(500).json({
             success: false,
-            error: "AI detection failed"
+            error: error.message || "AI detection failed"
         });
     }
 });
