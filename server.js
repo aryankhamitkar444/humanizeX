@@ -41,7 +41,7 @@ async function detectWithMistral(text) {
     }
 
     const response = await fetch(
-        "https://api.mistral.ai/v1/agents/completions",
+        "https://api.mistral.ai/v1/conversations",
         {
             method: "POST",
 
@@ -52,12 +52,8 @@ async function detectWithMistral(text) {
 
             body: JSON.stringify({
                 agent_id: process.env.MISTRAL_DETECT_AGENT_ID,
-                messages: [
-                    {
-                        role: "user",
-                        content: text
-                    }
-                ]
+                inputs: text,
+                stream: false
             })
         }
     );
@@ -90,7 +86,24 @@ async function detectWithMistral(text) {
         throw error;
     }
 
-    const replyText = data.choices?.[0]?.message?.content;
+    // ---------------------------------------------
+    // EXTRACT THE AGENT'S REPLY TEXT
+    // /v1/conversations returns:
+    // { conversation_id, outputs: [{ content: "..." }], usage }
+    // content can be a plain string, or (rarely) an array of
+    // content chunks like [{ type: "text", text: "..." }] —
+    // handle both.
+    // ---------------------------------------------
+
+    const outputContent = data.outputs?.[0]?.content;
+
+    let replyText = null;
+
+    if (typeof outputContent === "string") {
+        replyText = outputContent;
+    } else if (Array.isArray(outputContent)) {
+        replyText = outputContent.map(chunk => chunk.text || "").join("");
+    }
 
     if (!replyText || typeof replyText !== "string") {
 
@@ -231,7 +244,7 @@ async function humanizeWithMistral(text) {
     }
 
     const response = await fetch(
-        "https://api.mistral.ai/v1/agents/completions",
+        "https://api.mistral.ai/v1/conversations",
         {
             method: "POST",
 
@@ -242,12 +255,8 @@ async function humanizeWithMistral(text) {
 
             body: JSON.stringify({
                 agent_id: process.env.MISTRAL_AGENT_ID,
-                messages: [
-                    {
-                        role: "user",
-                        content: text
-                    }
-                ]
+                inputs: text,
+                stream: false
             })
         }
     );
@@ -286,9 +295,19 @@ async function humanizeWithMistral(text) {
 
     // ---------------------------------------------
     // EXTRACT TEXT
+    // /v1/conversations returns:
+    // { conversation_id, outputs: [{ content: "..." }], usage }
     // ---------------------------------------------
 
-    const humanizedText = data.choices?.[0]?.message?.content;
+    const outputContent = data.outputs?.[0]?.content;
+
+    let humanizedText = null;
+
+    if (typeof outputContent === "string") {
+        humanizedText = outputContent;
+    } else if (Array.isArray(outputContent)) {
+        humanizedText = outputContent.map(chunk => chunk.text || "").join("");
+    }
 
     if (
         !humanizedText ||
